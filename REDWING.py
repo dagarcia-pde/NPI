@@ -122,6 +122,6 @@ class RedWing:
         df = pd.DataFrame(extracted_info)
         return df
         
-# RW = RedWing(xeus_source='F32_PROD_XEUS', debug_flag=True)
+RW = RedWing(xeus_source='F32_PROD_XEUS', debug_flag=True)
 
 
