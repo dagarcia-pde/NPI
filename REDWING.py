@@ -121,7 +121,16 @@ class RedWing:
                 
         df = pd.DataFrame(extracted_info)
         return df
+    
+    def get_lots(self, GROUP_NAME):
+        """Get lots for a specific group name."""
+        if GROUP_NAME not in self.NPIs:
+            raise ValueError(f"Group name '{GROUP_NAME}' not found in NPI list.")
         
-RW = RedWing(xeus_source='F32_PROD_XEUS', debug_flag=True)
+        # lots = self.NPI_List[self.NPI_List['GROUP_NAME'] == GROUP_NAME]['LOT'].unique()
+        lots_with_types = self.NPI_List[self.NPI_List['GROUP_NAME'] == GROUP_NAME][['LOT', 'LOT_TYPE']].drop_duplicates()
+        lots = lots_with_types.to_dict('records')
+        return lots
+# RW = RedWing(xeus_source='F32_PROD_XEUS', debug_flag=True)
 
 
