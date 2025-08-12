@@ -106,17 +106,19 @@ class RedWing:
             lot_title = row['LOT_TITLE'] 
             scenario_name = row['SCENARIO_NAME'] 
             lot = row['LOT'] 
+            commit = row['COMMIT_OUT']
             lot_type = self.determine_lot_type(lot_title, scenario_name)
             
             if lot_type is not None:
                 
-                
+            
                 extracted_info.append({
                     'GROUP_NAME': group_name,
                     'DOTPROCESS': dotprocess,
                     'LOT_TITLE': lot_title,
                     'LOT': lot,
-                    'LOT_TYPE': lot_type
+                    'LOT_TYPE': lot_type,
+                    'COMMIT': commit
                 })
                 
         df = pd.DataFrame(extracted_info)
@@ -128,7 +130,7 @@ class RedWing:
             raise ValueError(f"Group name '{GROUP_NAME}' not found in NPI list.")
         
         # lots = self.NPI_List[self.NPI_List['GROUP_NAME'] == GROUP_NAME]['LOT'].unique()
-        lots_with_types = self.NPI_List[self.NPI_List['GROUP_NAME'] == GROUP_NAME][['LOT', 'LOT_TYPE']].drop_duplicates()
+        lots_with_types = self.NPI_List[self.NPI_List['GROUP_NAME'] == GROUP_NAME][['LOT', 'LOT_TYPE','COMMIT']].drop_duplicates()
         lots = lots_with_types.to_dict('records')
         return lots
 # RW = RedWing(xeus_source='F32_PROD_XEUS', debug_flag=True)

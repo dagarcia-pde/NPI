@@ -26,9 +26,9 @@ class Product:
         elif self.npi is None:
             raise ValueError("NPI must be specified")
         else:
-            df = self.run_query(self.sql_LeadLot_query())
+            df = self.run_query(self.sql_LeadLot_query(),self.xeus_source)
             lot7 = ','.join([f"'{lot7}'" for lot7 in df['LOT7'].unique()])
-            self.master_flow = self.masterFlow(self.run_query(self.sql_lot_query(lot7,7)))
+            self.master_flow = self.masterFlow(self.run_query(self.sql_lot_query(lot7,7),self.xeus_source))
             
     def litho_operation_decoder(self):
         self.cond_list = [' ','#',
@@ -78,6 +78,7 @@ class Product:
                 ,o.area AS AREA
                 ,o.module AS MODULE
                 ,MIN(lf.EXEC_SEQ) AS SEQ
+                ,max(lf.out_date) as OUT_DATE
             FROM
                 F_LOT_FLOW lf
                 CROSS JOIN F_Facility f
@@ -94,11 +95,11 @@ class Product:
                 ,o.module
         '''
         return query
-    def run_query(self, query):
-        
+    def run_query(self, query, xeus_source):
+
         if self.verbose: print(f"SQL Query {self.query_count}: {query}")
         
-        with PyUber.connect(datasource=self.xeus_source) as conn:
+        with PyUber.connect(datasource=xeus_source) as conn:
             df = pd.read_sql(query, conn)
         
         if self.debug_flag:
@@ -156,13 +157,27 @@ class Product:
         for lot in lot_list:
             print(f"LOT: {lot['LOT']}, LOT_TYPE: {lot['LOT_TYPE']}")
             if lot['LOT'] not in self.lot_dict:
-                self.add_Lot(lot['LOT'], lot['LOT_TYPE'])
-    def add_Lot(self, lot,lot_type):
-        df = self.run_query(self.sql_lot_query(f"'{lot}'"))
+                self.add_Lot(lot['LOT'], lot['LOT_TYPE'], lot['COMMIT'])
+    def add_Lot(self, lot,lot_type, commit=None):
+        df = self.run_query(self.sql_lot_query(f"'{lot}'"), self.xeus_source)
         df['LOT_TYPE'] = lot_type
         df['NPI'] = self.npi
+        df['COMMIT'] = commit
         mf = self.master_flow
-        df2 = pd.merge(df[['NPI','LOT_TYPE','LOT','OPERATION','OPER_SHORT','OPER_LONG']], mf[['OPER_SHORT','ORDER','LAYER']], left_on=['OPER_SHORT'], right_on=['OPER_SHORT'], how='inner').sort_values(by='ORDER').reset_index(drop=True)
+        df2 = pd.merge(df[['NPI','LOT_TYPE','LOT','COMMIT','OPERATION','OPER_SHORT','OPER_LONG','OUT_DATE']], mf[['OPER_SHORT','ORDER','LAYER']], left_on=['OPER_SHORT'], right_on=['OPER_SHORT'], how='inner').sort_values(by='ORDER').reset_index(drop=True)
+
+        commit = df2.iloc[0]['COMMIT']
+        release_date = df2.iloc[0]['OUT_DATE']
+        reticle_layers = df2['ORDER'].max()
+
+        TPT = (commit - release_date).days
+        DPML = TPT/reticle_layers
+
+        df2['DPML_CUM'] = df2['ORDER'].apply(lambda x: DPML * (x))
+        df2['PLAN'] = release_date + pd.to_timedelta(df2['DPML_CUM'], unit='D')
+
+        df2 = df2.drop('DPML_CUM', axis=1)
+        
         self.lot_dict[lot] = df2
         
         if lot not in self.LotFlows:
