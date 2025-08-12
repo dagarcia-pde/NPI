@@ -16,6 +16,10 @@ class Product:
         self.LotFlows = pd.DataFrame()
         
         self.xeus_source = kwargs.get('xeus_source', 'F32_PROD_XEUS')  # Access 'xeus_source' keyword argument
+        self.ret_xeus_source = kwargs.get('ret_xeus_source', 'D1D_PROD_XEUS_CENTRAL')  # Access 'xeus_source' keyword argument
+        
+        self.ret_overide = kwargs.get('ret_overide', 'ReticleConfig.xlsx')  # Access 'xeus_source' keyword argument
+        
         self.debug_flag = kwargs.get('debug_flag', False)  # Access 'debug_flag' keyword argument
         self.verbose = kwargs.get('verbose', False)  # Access 'debug_flag' keyword argument
         self.npi = kwargs.get('npi', None)  # Access 'xeus_source' keyword argument
@@ -29,6 +33,11 @@ class Product:
             df = self.run_query(self.sql_LeadLot_query(),self.xeus_source)
             lot7 = ','.join([f"'{lot7}'" for lot7 in df['LOT7'].unique()])
             self.master_flow = self.masterFlow(self.run_query(self.sql_lot_query(lot7,7),self.xeus_source))
+            
+            self.retDataRaw = self.run_query(self.sql_Reticle_query(self.product, self.product[:5]+self.product[-1:]), self.ret_xeus_source)      
+            self.retConfig = pd.read_excel(self.ret_overide, sheet_name='ReticleConfig')
+            self.Reticles = self.reticle_cleanup()
+            
             
     def litho_operation_decoder(self):
         self.cond_list = [' ','#',
@@ -95,6 +104,48 @@ class Product:
                 ,o.module
         '''
         return query
+    
+    def sql_Reticle_query(self,fab_prod,ret_name,imo_fab_list="'F32','F42','F12','F22','F52'"):
+        query = f'''
+            SELECT 
+                z0.commonname AS common_name
+                ,z0.title AS title
+                ,'{fab_prod}' AS FAB_PROD
+                ,z0.product AS RET_PROD
+                ,z0.rev AS rev
+                ,z0.layer AS layer
+                ,z0.step AS step
+                ,z0.platetype AS plate_type
+                ,z0.tapeintrend AS tapein_trend
+                ,z0.itotrend AS ito_trend
+                ,To_Char(z0.itocommit,'yyyy-mm-dd hh24:mi:ss') AS ito_commit
+                ,z0.itostatus AS ito_status
+                ,z0.retfabrev AS ret_fabrev
+                ,z0.fab AS fab
+                ,z0.barcode AS barcode
+                ,z0.imotrend AS imo_trend
+                ,To_Char(z0.imocommit,'yyyy-mm-dd hh24:mi:ss') AS imo_commit
+                ,z0.imostatus AS imo_status
+                ,To_Char(z0.shipdate,'yyyy-mm-dd hh24:mi:ss') AS shipdate
+                ,z0.fabrequireddate AS fab_requireddate
+                ,z0.imodotprocess AS imo_dotprocess
+                ,z0.imoishot AS imo_ishot
+                ,z0.technology AS technology
+                ,z0.toengcontact AS to_engcontact
+                ,z0.dbnames AS dbnames
+                ,To_Char(z0.last_updated_timestamp,'yyyy-mm-dd hh24:mi:ss') AS last_updated_timestamp
+            FROM 
+                F_IMO_TRIFECTA_DASHBOARD z0
+            WHERE
+                1=1
+                --AND z0.last_updated_timestamp >= SYSDATE - 180 
+                AND z0.fab In ({imo_fab_list})     
+                AND (
+                    z0.product LIKE '{ret_name}'
+                )
+        '''
+        return query
+    
     def run_query(self, query, xeus_source):
 
         if self.verbose: print(f"SQL Query {self.query_count}: {query}")
@@ -183,3 +234,60 @@ class Product:
         if lot not in self.LotFlows:
             self.LotFlows = pd.concat([self.LotFlows, df2.assign(LOT=lot)], ignore_index=True)
         
+    def cleanRetCol(self,dt):
+        try:
+            dt = pd.to_datetime(dt)
+            return dt
+        except ValueError:
+            dt = dt.str.replace('~','')
+            dt = pd.to_datetime(dt)
+            return dt
+        
+    def convert_to_days(self,col,min_val):
+        col = col - min_val
+        col = col.apply(lambda x: x.days if x>pd.Timedelta(days=0) else 0)
+        return col
+
+    def cleanupCommit(self,row):
+        cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=180)
+        
+        if row['IMO_TREND'] < cutoff_date:
+            return row['IMO_COMMIT']
+        else:
+            return row['IMO_TREND']    
+        
+    def reticle_version_handling(self,df, ret_version):
+        """
+        Uses the reticle data version input to overide and select specific reticles to use in tracking
+        """
+        # df['VER'] = df['RET_PROD'].str[:3]
+        df['VER'] = df['TITLE'].str[:3]
+        merged_data = df.merge(ret_version, how='left', on=['RET_PROD', 'LAYER'])
+        df = merged_data[(merged_data['VER'] == merged_data['VERSION']) | merged_data['VERSION'].isna()]
+        df.drop(columns=['VER','VERSION'], inplace=True)
+        
+        return df
+    
+    def reticle_cleanup(self):
+        RetData = self.retDataRaw.copy()
+        col_list =['TAPEIN_TREND','ITO_TREND','ITO_COMMIT','IMO_TREND','IMO_COMMIT','SHIPDATE','FAB_REQUIREDDATE']
+        for col in col_list:
+            RetData[col] = self.cleanRetCol(RetData[col])
+        if self.retConfig is not None:
+            RetData = self.reticle_version_handling(RetData, self.retConfig)
+        RetData['IMO_TREND'] = RetData.apply(lambda row: self.cleanupCommit(row), axis =1)
+        indexNames = RetData[RetData['IMO_STATUS']=='Rejected'].index
+        RetData.drop(indexNames, inplace=True)
+
+        indexNames = RetData[RetData['IMO_STATUS']=='Processing - Hold With Waiver'].index
+        RetData.drop(indexNames, inplace=True)
+
+        RetData['RetRev'] = RetData['TITLE'].str.slice(0, 3) 
+        RetData['RetNum'] = RetData['TITLE'].str[3:4]   
+        shipped_data = RetData[RetData['IMO_STATUS'] == 'Shipped'][['FAB_PROD', 'LAYER']].drop_duplicates()
+        RetData = RetData[~((RetData['IMO_STATUS'] != 'Shipped') & (RetData['LAYER'].isin(shipped_data['LAYER'])) & (RetData['RET_PROD'].isin(shipped_data['FAB_PROD'])))]
+
+        RetData = RetData.sort_values(by='IMO_COMMIT').drop_duplicates(subset=['LAYER'], keep='first')
+        RetData = pd.pivot_table(RetData,index=['LAYER'], values=['TAPEIN_TREND','ITO_TREND','FAB_REQUIREDDATE','IMO_TREND','SHIPDATE'], aggfunc=np.min).reset_index()        
+        
+        return RetData
