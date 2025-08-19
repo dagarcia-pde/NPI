@@ -3,6 +3,7 @@ import numpy as np
 import sys
 
 import PyUber
+import threading
 
 class Product:
     def __init__(self, *args, **kwargs):
@@ -205,10 +206,19 @@ class Product:
     
     def load_lot_list(self, lot_list):
         
+        threads = []
         for lot in lot_list:
             print(f"LOT: {lot['LOT']}, LOT_TYPE: {lot['LOT_TYPE']}")
             if lot['LOT'] not in self.lot_dict:
-                self.add_Lot(lot['LOT'], lot['LOT_TYPE'], lot['COMMIT'])
+                thread = threading.Thread(target=self.add_Lot, args=(lot['LOT'], lot['LOT_TYPE'], lot.get('COMMIT')))
+                threads.append(thread)
+                thread.start()
+                # self.add_Lot(lot['LOT'], lot['LOT_TYPE'], lot['COMMIT'])
+        
+        
+        for thread in threads:
+            thread.join()
+            
     def add_Lot(self, lot,lot_type, commit=None):
         df = self.run_query(self.sql_lot_query(f"'{lot}'"), self.xeus_source)
         df['LOT_TYPE'] = lot_type
